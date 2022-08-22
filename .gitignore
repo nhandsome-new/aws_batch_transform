@@ -1,0 +1,6 @@
+cifar10/
+data/
+outputs/
+.ipynb_checkpoints/
+Pipfile
+Pipfile.lock
