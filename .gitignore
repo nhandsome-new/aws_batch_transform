@@ -1,6 +1,9 @@
 cifar10/
 data/
 outputs/
+inference/
 .ipynb_checkpoints/
 Pipfile
 Pipfile.lock
+inputs/
+tutorial/
