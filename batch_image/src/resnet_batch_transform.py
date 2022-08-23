@@ -1,8 +1,6 @@
 import argparse
 import json
-import logging
 import os
-import sys
 import torch
 import torch.distributed as dist
 import torch.nn as nn
@@ -11,8 +9,7 @@ import torch.optim as optim
 import torch.utils.data
 import torch.utils.data.distributed
 from torchvision import datasets, transforms
-
-logger = logging.getLogger(__name__)
+from PIL import Image
 
 # Based on https://github.com/pytorch/examples/blob/master/mnist/main.py
 # https://colab.research.google.com/github/seyrankhademi/ResNet_CIFAR10/blob/master/CIFAR10_ResNet.ipynb
@@ -72,7 +69,6 @@ def resnet20():
     return ResNet(BasicBlock, [3, 3, 3])
 
 def _get_train_data_loader(batch_size, training_dir, is_distributed, **kwargs):
-    logger.info("Get train data loader")
     train_tensor = torch.load(os.path.join(training_dir, 'training.pt'))
     dataset = torch.utils.data.TensorDataset(train_tensor[0], train_tensor[1])
     train_sampler = torch.utils.data.distributed.DistributedSampler(dataset) if is_distributed else None
@@ -82,7 +78,6 @@ def _get_train_data_loader(batch_size, training_dir, is_distributed, **kwargs):
                                        sampler=train_sampler, **kwargs)
 
 def _get_test_data_loader(test_batch_size, training_dir, **kwargs):
-    logger.info("Get test data loader")
     test_tensor = torch.load(os.path.join(training_dir, 'test.pt'))
     dataset = torch.utils.data.TensorDataset(test_tensor[0], test_tensor[1])
     return torch.utils.data.DataLoader(
@@ -90,36 +85,68 @@ def _get_test_data_loader(test_batch_size, training_dir, **kwargs):
         batch_size=test_batch_size,
         shuffle=False, **kwargs)
 
+def _load_image(img_path):
+    image = Image.open(img_path)
+    image_tensor = transform()(image).unsqueeze(0)  
+    return image_tensor    
+
+def model_load():
+    '''
+    どんなモデルを使いますか
+    '''
+    return resnet20()
+
+BATCH_SIZE = 128
+transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
+])
+
 def model_fn(model_dir):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = torch.nn.DataParallel(resnet20())
+    model = torch.nn.DataParallel(model_load())
     with open(os.path.join(model_dir, 'model.pth'), 'rb') as f:
         model.load_state_dict(torch.load(f))
     return model.to(device)
 
+def _decode_request(request_body):
+    lines = request_body.decode("utf-8").rstrip(os.linesep).split(os.linesep)
+    _data = []
+    for line in lines:
+        line = line.strip()
+        input_data = json.loads(line)
+        # TODO: Image pathがない時は？
+        img_path = input_data.get('img_path')
+        _data.append(_load_image(img_path))
+    tensor_data = torch.concat(_data)
+    return tensor_data
+
 def input_fn(request_body, content_type='application/jsonlines'):
     if content_type == 'application/jsonlines':
-        print("request received!!")
-        print(type(request_body))
-        print(f'requestbody:{request_body}')
+        print("request received : application/jsonlines")
         # Warning: for some reason, when Sagemaker is doing batch transform,
         # it automatically adds a line break in the end, needs to strip the line break to avoid errors.
         # Sagemaker Endpoint doesn't have such issue.
-        lines = request_body.decode("utf-8").rstrip(os.linesep).split(os.linesep)
-        data = []
-        for line in lines:
-            line = line.strip()
-            input_data = json.loads(line)
-            print(input_data)
-            data.append(input_data)
+        data = _decode_request(request_body)
         print(f'Num of data in a request: {len(data)}')
         return data
-
     raise Exception(f'Requested unsupported ContentType in content_type {content_type}')
 
 def predict_fn(input_obj, model):
-    logger.debug(input_obj)
-    return {"predictions": input_obj}
+    print(f'Input Object Shape: {input_obj.shape}')
+    pred = []
+    if len(input_obj) <= BATCH_SIZE:
+        print('Input Data Size <= BATCH_SIZE')
+        pred += model(input_obj)
+    else:
+        print('Input Data Size > BATCH_SIZE')
+        print(f'Split input data by BATCH_SIZE:{BATCH_SIZE}')
+        batch_list = torch.split(input_obj, BATCH_SIZE, dim=0)
+        for batch in batch_list:
+            pred += model(batch)
+    pred = torch.concat(pred)
+    print(f'Prediction Shape: {pred.shape}')
+    return {"predictions": pred}
 
 def output_fn(predictions, response_content_type):
     return json.dumps(predictions)
@@ -158,4 +185,4 @@ if __name__ == '__main__':
     parser.add_argument('--data-dir', type=str, default=os.environ['SM_CHANNEL_TRAINING'])
     parser.add_argument('--num-gpus', type=int, default=os.environ['SM_NUM_GPUS'])
 
-    train(parser.parse_args())
+    # train(parser.parse_args())

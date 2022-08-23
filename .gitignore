@@ -7,3 +7,4 @@ Pipfile
 Pipfile.lock
 inputs/
 tutorial/
+__pycache__/
