@@ -10,6 +10,7 @@ import torch.utils.data
 import torch.utils.data.distributed
 from torchvision import datasets, transforms
 from PIL import Image
+import base64, io
 
 # Based on https://github.com/pytorch/examples/blob/master/mnist/main.py
 # https://colab.research.google.com/github/seyrankhademi/ResNet_CIFAR10/blob/master/CIFAR10_ResNet.ipynb
@@ -97,10 +98,6 @@ def model_load():
     return resnet20()
 
 BATCH_SIZE = 128
-transform = transforms.Compose([
-    transforms.ToTensor(),
-    transforms.Normalize([0.5, 0.5, 0.5], [0.5, 0.5, 0.5]),
-])
 
 def model_fn(model_dir):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -109,6 +106,11 @@ def model_fn(model_dir):
         model.load_state_dict(torch.load(f))
     return model.to(device)
 
+def _decode_bytes(bytes):
+    str_decode = bytes.encode('utf-8')
+    bytes_decode = base64.b64decode(str_decode)
+    return bytes_decode
+
 def _decode_request(request_body):
     lines = request_body.decode("utf-8").rstrip(os.linesep).split(os.linesep)
     _data = []
@@ -116,8 +118,12 @@ def _decode_request(request_body):
         line = line.strip()
         input_data = json.loads(line)
         # TODO: Image pathがない時は？
-        img_path = input_data.get('img_path')
-        _data.append(_load_image(img_path))
+        _img_bytes = input_data.pop('inputs',input_data)
+        _img_bytes = _decode_bytes(_img_bytes)
+        image_as_bytes = io.BytesIO(_img_bytes)
+        image = Image.open(image_as_bytes)
+        image_tensor = transforms.ToTensor()(image).unsqueeze(0)
+        _data.append(image_tensor)
     tensor_data = torch.concat(_data)
     return tensor_data
 
@@ -143,12 +149,18 @@ def predict_fn(input_obj, model):
         print(f'Split input data by BATCH_SIZE:{BATCH_SIZE}')
         batch_list = torch.split(input_obj, BATCH_SIZE, dim=0)
         for batch in batch_list:
-            pred += model(batch)
-    pred = torch.concat(pred)
-    print(f'Prediction Shape: {pred.shape}')
+            output = model(batch)
+            print(output.shape)
+            pred += torch.argmax(output).item()
+            
+    # pred = torch.concat(pred)
+    
+    # print(f'Prediction Shape: {pred.shape}')
+    # print(pred[0])
     return {"predictions": pred}
 
 def output_fn(predictions, response_content_type):
+    
     return json.dumps(predictions)
 
 def save_model(model, model_dir):
