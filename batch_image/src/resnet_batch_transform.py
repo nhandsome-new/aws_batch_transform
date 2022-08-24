@@ -11,6 +11,7 @@ import torch.utils.data.distributed
 from torchvision import datasets, transforms
 from PIL import Image
 import base64, io
+import numpy as np
 
 # Based on https://github.com/pytorch/examples/blob/master/mnist/main.py
 # https://colab.research.google.com/github/seyrankhademi/ResNet_CIFAR10/blob/master/CIFAR10_ResNet.ipynb
@@ -67,37 +68,15 @@ class ResNet(nn.Module):
         return out
 
 def resnet20():
-    return ResNet(BasicBlock, [3, 3, 3])
+    return ResNet(BasicBlock, [3, 3, 3])  
 
-def _get_train_data_loader(batch_size, training_dir, is_distributed, **kwargs):
-    train_tensor = torch.load(os.path.join(training_dir, 'training.pt'))
-    dataset = torch.utils.data.TensorDataset(train_tensor[0], train_tensor[1])
-    train_sampler = torch.utils.data.distributed.DistributedSampler(dataset) if is_distributed else None
-    return torch.utils.data.DataLoader(dataset, 
-                                       batch_size=batch_size, 
-                                       shuffle=train_sampler is None,
-                                       sampler=train_sampler, **kwargs)
-
-def _get_test_data_loader(test_batch_size, training_dir, **kwargs):
-    test_tensor = torch.load(os.path.join(training_dir, 'test.pt'))
-    dataset = torch.utils.data.TensorDataset(test_tensor[0], test_tensor[1])
-    return torch.utils.data.DataLoader(
-        dataset,
-        batch_size=test_batch_size,
-        shuffle=False, **kwargs)
-
-def _load_image(img_path):
-    image = Image.open(img_path)
-    image_tensor = transform()(image).unsqueeze(0)  
-    return image_tensor    
+BATCH_SIZE = 128
 
 def model_load():
     '''
     どんなモデルを使いますか
     '''
     return resnet20()
-
-BATCH_SIZE = 128
 
 def model_fn(model_dir):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -117,7 +96,6 @@ def _decode_request(request_body):
     for line in lines:
         line = line.strip()
         input_data = json.loads(line)
-        # TODO: Image pathがない時は？
         _img_bytes = input_data.pop('inputs',input_data)
         _img_bytes = _decode_bytes(_img_bytes)
         image_as_bytes = io.BytesIO(_img_bytes)
@@ -143,58 +121,50 @@ def predict_fn(input_obj, model):
     pred = []
     if len(input_obj) <= BATCH_SIZE:
         print('Input Data Size <= BATCH_SIZE')
-        pred += model(input_obj)
+        output = model(input_obj)
+        pred += torch.argmax(output, dim=1)
     else:
         print('Input Data Size > BATCH_SIZE')
         print(f'Split input data by BATCH_SIZE:{BATCH_SIZE}')
         batch_list = torch.split(input_obj, BATCH_SIZE, dim=0)
         for batch in batch_list:
             output = model(batch)
-            print(output.shape)
-            pred += torch.argmax(output).item()
-            
-    # pred = torch.concat(pred)
+            pred += torch.argmax(output, dim=1)
     
-    # print(f'Prediction Shape: {pred.shape}')
-    # print(pred[0])
+    pred = np.array(pred).tolist()
+   
     return {"predictions": pred}
 
 def output_fn(predictions, response_content_type):
     
     return json.dumps(predictions)
 
-def save_model(model, model_dir):
-    print("Saving the model.")
-    path = os.path.join(model_dir, 'model.pth')
-    # recommended way from http://pytorch.org/docs/master/notes/serialization.html
-    torch.save(model.cpu().state_dict(), path)
+# if __name__ == '__main__':
+#     parser = argparse.ArgumentParser()
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
+#     # Data and model checkpoints directories
+#     parser.add_argument('--batch-size', type=int, default=64, metavar='N',
+#                         help='input batch size for training (default: 64)')
+#     parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
+#                         help='input batch size for testing (default: 1000)')
+#     parser.add_argument('--epochs', type=int, default=10, metavar='N',
+#                         help='number of epochs to train (default: 10)')
+#     parser.add_argument('--lr', type=float, default=0.01, metavar='LR',
+#                         help='learning rate (default: 0.01)')
+#     parser.add_argument('--momentum', type=float, default=0.5, metavar='M',
+#                         help='SGD momentum (default: 0.5)')
+#     parser.add_argument('--seed', type=int, default=1, metavar='S',
+#                         help='random seed (default: 1)')
+#     parser.add_argument('--log-interval', type=int, default=100, metavar='N',
+#                         help='how many batches to wait before logging training status')
+#     parser.add_argument('--backend', type=str, default=None,
+#                         help='backend for distributed training (tcp, gloo on cpu and gloo, nccl on gpu)')
 
-    # Data and model checkpoints directories
-    parser.add_argument('--batch-size', type=int, default=64, metavar='N',
-                        help='input batch size for training (default: 64)')
-    parser.add_argument('--test-batch-size', type=int, default=1000, metavar='N',
-                        help='input batch size for testing (default: 1000)')
-    parser.add_argument('--epochs', type=int, default=10, metavar='N',
-                        help='number of epochs to train (default: 10)')
-    parser.add_argument('--lr', type=float, default=0.01, metavar='LR',
-                        help='learning rate (default: 0.01)')
-    parser.add_argument('--momentum', type=float, default=0.5, metavar='M',
-                        help='SGD momentum (default: 0.5)')
-    parser.add_argument('--seed', type=int, default=1, metavar='S',
-                        help='random seed (default: 1)')
-    parser.add_argument('--log-interval', type=int, default=100, metavar='N',
-                        help='how many batches to wait before logging training status')
-    parser.add_argument('--backend', type=str, default=None,
-                        help='backend for distributed training (tcp, gloo on cpu and gloo, nccl on gpu)')
-
-    # Container environment
-    parser.add_argument('--hosts', type=list, default=json.loads(os.environ['SM_HOSTS']))
-    parser.add_argument('--current-host', type=str, default=os.environ['SM_CURRENT_HOST'])
-    parser.add_argument('--model-dir', type=str, default=os.environ['SM_MODEL_DIR'])
-    parser.add_argument('--data-dir', type=str, default=os.environ['SM_CHANNEL_TRAINING'])
-    parser.add_argument('--num-gpus', type=int, default=os.environ['SM_NUM_GPUS'])
+#     # Container environment
+#     parser.add_argument('--hosts', type=list, default=json.loads(os.environ['SM_HOSTS']))
+#     parser.add_argument('--current-host', type=str, default=os.environ['SM_CURRENT_HOST'])
+#     parser.add_argument('--model-dir', type=str, default=os.environ['SM_MODEL_DIR'])
+#     parser.add_argument('--data-dir', type=str, default=os.environ['SM_CHANNEL_TRAINING'])
+#     parser.add_argument('--num-gpus', type=int, default=os.environ['SM_NUM_GPUS'])
 
     # train(parser.parse_args())

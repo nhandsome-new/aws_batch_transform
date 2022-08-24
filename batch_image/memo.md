@@ -68,58 +68,84 @@ split_type='Line'
 
 
 
-## 정리
+
+
+
+# Batch Transformer Setting 比較
 1. 'SingleRecord' + 'Line'
-- 파일이랑 관계없이 한줄한줄의 Line을 Request Body로 취급
-- 큰 용량의 request가 아닌 이상, max_payload는 1로 충분할듯
+    - inference_dir中の、ファイル数・ファイル中のLine数と関係なく
+    - いつも「一つのLine → requestBody」として処理
 
 2. 'SingleRecord' + 'None'
-- 파일 하나를 하나의 Request Body로 취급한다.
-- max_payload 를 넘어가는 데이터가 들어오면 오류가 발생
+    - inference_dir中の、「一つのファイルのすべてのLine → requestBody」として処理
 
 3. 'MultiRecord' + 'Line'
-- max_payload 의 용량에 맞춰서 mini_batch를 만들어 Request Body로 취급
-- max_payload의 설정에 따라 mini_batch 사이즈 조절이 가능하다.
+    - inference_dir中のファイルのLineを、「max_payload設定に合わせてmini batch生成 → requestBody」として処理
 
-### Batch Transform 활용
+## 例
+- 入力：jsonlines file ２つ
+    - 1：2,400 Lines
+    - 2：21,600 Lines
+- 出力
+    1. 'SingleRecord' + 'Line'
+        - requestBody Size : 1
+        - Counts of request : 2400 + 21600
+    2. 'SingleRecord' + 'None'
+        - requestBody Size : 2400、　21600
+        - Counts of request : 2
+    3. 'MultiRecord' + 'Line'
+        - requestBody Size : 2400、　14789、　6811
+        - Counts of request : 3
+
+## 活用方法を考えてみた
 1. 'SingleRecord' + 'Line'
-- 라인별 배치 구성 
-    - 시계열 자료와 같이 입력 데이터의 용량이 큰 경우, 하나의 데이터를 입력으로 사용
-    - 'input1', 'input2', ..., 'inputN' 같이 소수의 batch를 구성하여 입력으로 사용
-        - N개의 input을 한줄로 json 처리하기
-    - 필요한 것: 입력의 길이 < max_payload
+- 時系列のように、「入力がでかい・推論時間が長い」
+    - 必要なタスク(Lambda)
+        - 全てのデータをinstance数に合わせて分ける。
+    - Batch Transform
+        - 一個のファイルを一個のinstanceが処理
+        - １行　＝　入力
+    - 注意点
+        - max_payloadを超えないrequestBodyサイズ
 
 2. 'SingleRecord' + 'None'
-- 파일별 배치 구성 
-    - 배치사이즈 만큼의 라인을 하나의 파일로
-        - N개의 input을 N개의 라인으로 만들고, 하나의 파일로 저장
-    - instance수를 늘렸을 때, 자동으로 파일이 분배될 것이다.
-    - 필요한 것: 입력의 길이 < max_payload
+- マルチモーダルのように、「入力が複数」
+    - 必要なタスク(Lambda)
+        - 入力データの組み合わせを一つのファイルとして保存
+    - Batch Transform
+        - ファイル一個づつ、instanceが処理
+        - 一個のファイル（複数のLine、複数のデータ）＝ 入力
+    - 注意点
+        - max_payloadを超えないrequestBodyサイズ
 
+3. 'MultiRecord' + 'Line'
+- 普通にBatch処理したい場合
+    - 必要なタスク(Lambda)
+        - 全てのデータをinstance数に合わせて分ける。
+    - Batch Transform
+        - max_payloadに合わせて、mini-batchを作る
+        - mini-batch（複数のLine）＝ 入力
+    - 注意点
+        - mini-batchサイズ　＞　モデルのcapa　にならないように
+        - 内部的にmini-batchをBATCH_SIZEに分けて処理
+
+
+
+## 注意点
+1. instanceを複数生成数　＜　inference_dir中のファイルの数
     ```python
     When you have multiples files, one instance might process input1.csv, and another instance might process the file named input2.csv. If you have one input file but initialize multiple compute instances, only one instance processes the input file and the rest of the instances are idle.
     ```
+2. max_payload ＞＝　requestBody
+- 'SingleRecord' + 'Line' / 'SingleRecord' + 'None' の場合、mini_batchを生成しないため、Error
 
-3. 'MultiRecord' + 'Line'
-- 자동 배치 구성
-    - 하나의 파일에 모든 인풋을 넣으면 자동으로 mini_batch생성
-    - predict_fn 에서 request_body를 N개의 배치로 나누어 처리
-    - max_payload에 따른 오류는 없을것 같다.
-    - instance수를 늘리려면, 파일도 instance수만큼 만들어야한다.
 
-### 결론
-- Input response가 충분히 크고 모델이 무겁다. (시계열데이터)
-    - 'SingleRecord' + 'Line'
-    - 모델이 받아들일 수 있을 만큼만 라인별 배치구성
-    - 한줄씩 모델이 처리
-    - Multi Instance를 사용한다면, Instance수만큼의 파일이 필요
-
-- 한번에 많은 데이터를 처리 / 모델이 한번에 추론할 수 있는 배치(N)를 알고 있다. (이미지 분류)
-    - Instance를 자유롭게 조절하고 싶다면 
-        - 'SingleRecord' + 'None'
-        -  "인스턴스 수 < 파일 수" 의 경우 문제없이 처리 
-        - N만큼 전처리(N라인을 가진 파일을 생성)가 필요
-    - Inctance를 고정한다면
-        - 'MultiRecord' + 'Line'
-        - 고정된 인스턴스 수만큼 파일을 준비해둔다
-        - N만큼 내부적으로 배치를 만들 필요
+## 今後タスク
+1. Lambda　作成 
+    - 「Input・Ouput」比較
+    - 未処理データ抽出
+    - 未処理データを複数に分ける（multi instanceの場合にも対応でくる）
+    - Jsonlines ファイルをInstanceフォルダに保存
+    - Batch Transform job起動
+2. Batch Transform
+    - [Associate Prediction Results with Input Records](https://docs.aws.amazon.com/sagemaker/latest/dg/batch-transform-data-processing.html)
