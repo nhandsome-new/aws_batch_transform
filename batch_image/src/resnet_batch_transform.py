@@ -78,13 +78,6 @@ def model_load():
     '''
     return resnet20()
 
-def model_fn(model_dir):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = torch.nn.DataParallel(model_load())
-    with open(os.path.join(model_dir, 'model.pth'), 'rb') as f:
-        model.load_state_dict(torch.load(f))
-    return model.to(device)
-
 def _decode_bytes(bytes):
     str_decode = bytes.encode('utf-8')
     bytes_decode = base64.b64decode(str_decode)
@@ -105,7 +98,19 @@ def _decode_request(request_body):
     tensor_data = torch.concat(_data)
     return tensor_data
 
+def model_fn(model_dir):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = torch.nn.DataParallel(model_load())
+    with open(os.path.join(model_dir, 'model.pth'), 'rb') as f:
+        model.load_state_dict(torch.load(f))
+    return model.to(device)
+
 def input_fn(request_body, content_type='application/jsonlines'):
+    '''
+    入力データの形によって、encode / decodeが変わる
+    ここでは、Image - ENCODE - bytes - DECODE - Image
+    Image以外には簡単ではないかな？
+    '''
     if content_type == 'application/jsonlines':
         print("request received : application/jsonlines")
         # Warning: for some reason, when Sagemaker is doing batch transform,
@@ -117,6 +122,10 @@ def input_fn(request_body, content_type='application/jsonlines'):
     raise Exception(f'Requested unsupported ContentType in content_type {content_type}')
 
 def predict_fn(input_obj, model):
+    '''
+    Mini BatchのサイズがモデルのCapaより大きい場合、
+        BATCH_SIZEに合わせて分けて処理 → concat
+    '''
     print(f'Input Object Shape: {input_obj.shape}')
     pred = []
     if len(input_obj) <= BATCH_SIZE:
@@ -136,6 +145,10 @@ def predict_fn(input_obj, model):
     return {"predictions": pred}
 
 def output_fn(predictions, response_content_type):
+    '''
+    Response 形を変えることができる
+        Associate result with input で触るかも
+    '''
     
     return json.dumps(predictions)
 
