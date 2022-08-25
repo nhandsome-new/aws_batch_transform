@@ -124,7 +124,7 @@ def input_fn(request_body, content_type='application/jsonlines'):
 def predict_fn(input_obj, model):
     '''
     Mini BatchのサイズがモデルのCapaより大きい場合、
-        BATCH_SIZEに合わせて分けて処理 → concat
+        BATCH_SIZEに合わせて分けて処理 → 合体
     '''
     print(f'Input Object Shape: {input_obj.shape}')
     pred = []

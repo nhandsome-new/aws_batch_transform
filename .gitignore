@@ -8,4 +8,3 @@ Pipfile.lock
 inputs/
 tutorial/
 __pycache__/
-real_inference/
