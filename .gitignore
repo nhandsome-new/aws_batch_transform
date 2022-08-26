@@ -8,3 +8,5 @@ Pipfile.lock
 inputs/
 tutorial/
 __pycache__/
+batch_transform_image_input.ipynb
+real_inference/
