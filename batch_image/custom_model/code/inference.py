@@ -32,8 +32,11 @@ def _decode_request(request_body):
     for line in lines:
         line = line.strip()
         input_data = json.loads(line)
+
         _img_bytes = input_data.pop('inputs',input_data)
         _img_bytes = _decode_bytes(_img_bytes)
+        # _img_bytes = _decode_bytes(input_data)
+
         image_as_bytes = io.BytesIO(_img_bytes)
         image = Image.open(image_as_bytes)
         image_tensor = transforms.ToTensor()(image).unsqueeze(0)
@@ -74,15 +77,16 @@ def predict_fn(input_obj, model):
     output = model(input_obj)[0]
     pred += torch.argmax(output, dim=1)
     pred = np.array(pred).tolist()
-   
-    return {"predictions": pred}
+    
+    # return {"predictions": pred}
+    return pred
 
 def output_fn(predictions, accept="application/jsonlines"):
-    '''
-    Response 形を変えることができる
-        Associate result with input で触るかも
-    '''
+    my_dict = []
     if accept == "application/jsonlines":
-        my_dict = predictions
+        for pred in predictions:
+            my_dict.append({"predictions": pred})
+        print(F'NUM OF OUTPUT: {len(my_dict)}')
+        
         return json.dumps(my_dict)
     raise Exception("{} accept type is not supported by this script.".format(accept))
