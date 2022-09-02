@@ -10,3 +10,9 @@ tutorial/
 __pycache__/
 batch_transform_image_input.ipynb
 real_inference/
+.DS_Store
+model/
+*.ipynb
+batch_image/batch_transform_custom.ipynb
+./
+../
