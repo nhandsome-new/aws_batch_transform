@@ -73,20 +73,25 @@ def predict_fn(input_obj, model):
         BATCH_SIZEに合わせて分けて処理 → 合体
     '''
     print(f'Input Object Shape: {input_obj.shape}')
-    pred = []
+    # pred = []
     output = model(input_obj)[0]
-    pred += torch.argmax(output, dim=1)
+    pred = torch.argmax(output, dim=1)
+    print(f'PREDS SHAPE:{pred.shape}')
     pred = np.array(pred).tolist()
-    
     # return {"predictions": pred}
     return pred
 
 def output_fn(predictions, accept="application/jsonlines"):
-    my_dict = []
     if accept == "application/jsonlines":
+        lines = []
         for pred in predictions:
-            my_dict.append({"predictions": pred})
-        print(F'NUM OF OUTPUT: {len(my_dict)}')
-        
-        return json.dumps(my_dict)
+            lines.append({'predictions': pred})
+
+        json_lines = [json.dumps(l) for l in lines]
+
+        # Join lines and save to .jsonl file
+        json_data = '\n'.join(json_lines)
+
+        print(json_data)
+        return json.dumps(json_data)
     raise Exception("{} accept type is not supported by this script.".format(accept))
